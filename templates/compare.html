@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}TaGSense{% endblock %}
+
+{% block content %}
+
+<div class="chat-output" id="chatOutput">
+
+  <div class="chat-empty" id="emptyState">
+    <div class="chat-empty-title">Model <span class="text-accent">Comparison</span></div>
+    <div class="chat-empty-sub">Enter a post below to see how all three models predict its sentiment simultaneously.</div>
+    <div class="chat-empty-pills">
+      <span class="empty-pill">mBERT</span>
+      <span class="empty-pill">XLM-RoBERTa</span>
+      <span class="empty-pill">TLUnified-RoBERTa</span>
+    </div>
+  </div>
+
+  <div id="resultStream"></div>
+
+</div>
+
+<div class="chat-input-bar">
+  <div class="chat-input-inner">
+
+    <div class="chat-input-wrap">
+      <textarea
+        id="compareText"
+        class="chat-textarea"
+        placeholder="Enter a Taglish / Tagalog / English post to compare all 3 models…"
+        rows="1"
+      ></textarea>
+    </div>
+
+    <div class="chat-controls">
+      <span class="select-label" style="color:var(--text-muted);font-size:.75rem">Runs all 3 models</span>
+      <button id="compareBtn" class="btn-send" onclick="runCompare()">
+        <span class="btn-send-text">Compare</span>
+        <span class="btn-send-icon">↑</span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<div id="loadingOverlay" class="loading-overlay" style="display:none">
+  <div class="loading-spinner"></div>
+  <span class="loading-text">Running all 3 models…</span>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let compareCount = 0;
+
+const ta = document.getElementById('compareText');
+ta.addEventListener('input', () => {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+});
+ta.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') runCompare();
+});
+
+async function runCompare() {
+  const text = ta.value.trim();
+  if (!text) return;
+
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  document.getElementById('compareBtn').disabled = true;
+
+  try {
+    const res  = await fetch('/compare/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    renderCompare(data, text);
+    ta.value = '';
+    ta.style.height = 'auto';
+  } catch(e) {
+    alert('Error connecting to server.');
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('compareBtn').disabled = false;
+  }
+}
+
+function renderCompare(data, inputText) {
+  document.getElementById('emptyState').style.display = 'none';
+
+  compareCount++;
+  const id = 'cmp-' + compareCount;
+
+  const MODELS  = ['mbert','xlm-roberta','tlunified-roberta'];
+  const LABELS  = { 'mbert':'mBERT', 'xlm-roberta':'XLM-RoBERTa', 'tlunified-roberta':'TLUnified-RoBERTa' };
+  const emojis  = { Positive:'😊', Negative:'😠', Neutral:'😐' };
+  const classes = { Positive:'positive', Negative:'negative', Neutral:'neutral' };
+  const mColors = ['#38bdf8','#a78bfa','#fb923c'];
+
+  // trueLabel/truePct: read from raw confidence scores, not the mutated .label/.top_conf
+  // (enhance_post can flip label without updating confidence values)
+  function trueTopEntry(r) {
+    const c = r.confidence || {};
+    return Object.entries(c).reduce((best, cur) => cur[1] > best[1] ? cur : best, ['neutral', 0]);
+  }
+  function trueLabel(r) {
+    const key = trueTopEntry(r)[0];
+    return key.charAt(0).toUpperCase() + key.slice(1);
+  }
+  function truePct(r) { return +(trueTopEntry(r)[1] * 100).toFixed(1); }
+
+  let mostConf = { model:'', val:-1 };
+  MODELS.forEach(m => {
+    const pct = truePct(data.models[m]);
+    if (pct > mostConf.val) mostConf = { model: m, val: pct };
+  });
+
+  const modelCardsHTML = MODELS.map((m, idx) => {
+    const r        = data.models[m];
+    const label    = trueLabel(r);
+    const topPct   = truePct(r);
+    const sentClass = classes[label] || 'neutral';
+    const isWinner  = m === mostConf.model;
+    return `
+      <div class="chat-result-card ${isWinner ? 'chat-result-card--winner' : ''}">
+        <div class="compare-model-header">
+          <span class="compare-model-name" style="color:${mColors[idx]}">${LABELS[m]}</span>
+          ${isWinner ? '<span class="card-badge" style="border-color:var(--accent);color:var(--accent)">Most confident</span>' : ''}
+        </div>
+        <div class="chat-sentiment label-${sentClass}" style="font-size:1.3rem;margin:.4rem 0">
+          ${label} <span class="chat-sentiment-emoji">${emojis[label]||''}</span>
+        </div>
+        <canvas id="${id}-chart-${m}" height="80"></canvas>
+        <div class="top-conf" style="margin-top:.4rem">Top confidence: ${topPct}%</div>
+      </div>
+    `;
+  }).join('');
+
+  const block = document.createElement('div');
+  block.className = 'chat-bubble';
+  block.id = id;
+  block.innerHTML = `
+    <div class="chat-user-msg">
+      <span class="chat-user-meta">All 3 models</span>
+      <div class="chat-user-text">${escHtml(inputText)}</div>
+    </div>
+
+    <div class="chat-response">
+
+      <!-- 3-column model cards -->
+      <div class="compare-model-grid">
+        ${modelCardsHTML}
+      </div>
+
+      <!-- Grouped chart + CSD -->
+      <div class="chat-response-grid" style="margin-top:.75rem">
+
+        <div class="chat-result-card">
+          <div class="chat-result-label">Confidence Comparison
+            <span class="card-badge" style="margin-left:.5rem" id="${id}-confBadge"></span>
+          </div>
+          <canvas id="${id}-groupedChart" height="160"></canvas>
+        </div>
+
+        <div class="chat-result-card">
+          <div class="chat-result-label">Code-Switch Density</div>
+          <div class="chat-metrics-grid">
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.csd}%</div>
+              <div class="chat-metric-label">CSD Score</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.token_count}</div>
+              <div class="chat-metric-label">Tokens</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.lang_type}</div>
+              <div class="chat-metric-label">Language</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.emoji_count}</div>
+              <div class="chat-metric-label">Emojis</div>
+            </div>
+          </div>
+          <div class="band-display" style="margin-top:.75rem">${data.band}</div>
+        </div>
+
+      </div>
+
+      <!-- Majority Vote card -->
+      ${buildVoteCard(data.vote, data.models)}
+    </div>
+  `;
+
+  document.getElementById('resultStream').appendChild(block);
+  block.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  MODELS.forEach((m, idx) => {
+    const r   = data.models[m];
+    const ctx = document.getElementById(`${id}-chart-${m}`).getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['Neg','Neu','Pos'],
+        datasets: [{
+          data: [
+            +(r.confidence.negative*100).toFixed(1),
+            +(r.confidence.neutral *100).toFixed(1),
+            +(r.confidence.positive*100).toFixed(1),
+          ],
+          backgroundColor: ['#ef4444aa','#6b7280aa','#22c55eaa'],
+          borderColor:     ['#ef4444',  '#6b7280',  '#22c55e'],
+          borderWidth: 1, borderRadius: 4,
+        }]
+      },
+      options: {
+        indexAxis:'y', responsive:true,
+        plugins:{ legend:{ display:false } },
+        scales:{
+          x:{ max:100, ticks:{ color:'#64748b', font:{size:9} }, grid:{ color:'#1e293b' } },
+          y:{ ticks:{ color:'#64748b', font:{size:9} }, grid:{ display:false } }
+        }
+      }
+    });
+  });
+
+  const gCtx = document.getElementById(`${id}-groupedChart`).getContext('2d');
+  new Chart(gCtx, {
+    type: 'bar',
+    data: {
+      labels: ['Negative','Neutral','Positive'],
+      datasets: MODELS.map((m,idx) => ({
+        label: LABELS[m],
+        data: [
+          +(data.models[m].confidence.negative*100).toFixed(1),
+          +(data.models[m].confidence.neutral *100).toFixed(1),
+          +(data.models[m].confidence.positive*100).toFixed(1),
+        ],
+        backgroundColor: mColors[idx]+'99',
+        borderColor: mColors[idx],
+        borderWidth:1, borderRadius:4,
+      }))
+    },
+    options:{
+      responsive:true,
+      plugins:{ legend:{ labels:{ color:'#94a3b8', font:{ family:'DM Sans' } } } },
+      scales:{
+        x:{ ticks:{ color:'#94a3b8' }, grid:{ color:'#1e293b' } },
+        y:{ max:100, ticks:{ color:'#94a3b8', callback: v=>v+'%' }, grid:{ color:'#1e293b' } }
+      }
+    }
+  });
+
+  document.getElementById(`${id}-confBadge`).textContent = 'Most confident: ' + LABELS[mostConf.model];
+}
+
+function buildVoteCard(vote, models) {
+  if (!vote) return '';
+
+  const emojis  = { Positive:'😊', Negative:'😠', Neutral:'😐' };
+  const classes = { Positive:'positive', Negative:'negative', Neutral:'neutral' };
+  const LABELS  = { 'mbert':'mBERT', 'xlm-roberta':'XLM-RoBERTa', 'tlunified-roberta':'TLUnified-RoBERTa' };
+
+  const winner     = vote.label || '—';
+  const sentClass  = classes[winner] || 'neutral';
+  const counts     = vote.counts || {};
+  const unanimous  = vote.agreement === 'full';
+  const tied       = vote.agreement === 'split';
+  // Build supporters list from models that voted for winner (using .label set by backend)
+  const supporters = models
+    ? Object.keys(models)
+        .filter(m => models[m]?.label === winner)
+        .map(m => LABELS[m] || m).join(', ')
+    : '';
+
+  const total = Object.values(counts).reduce((a, b) => a + b, 0) || 3;
+  const countBars = ['Positive','Neutral','Negative'].map(s => {
+    const n = counts[s] || 0;
+    const pct = Math.round((n / total) * 100);
+    const col = s === 'Positive' ? '#22c55e' : s === 'Negative' ? '#ef4444' : '#6b7280';
+    return `
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem">
+        <span style="width:4.5rem;font-size:.72rem;color:var(--text-muted)">${s}</span>
+        <div style="flex:1;background:#1e293b;border-radius:4px;height:8px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${col};border-radius:4px"></div>
+        </div>
+        <span style="width:1rem;font-size:.72rem;color:var(--text-muted);text-align:right">${n}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="chat-result-card" style="margin-top:.75rem">
+      <div class="chat-result-label" style="margin-bottom:.5rem">
+        Majority Vote
+        ${unanimous ? '<span class="card-badge" style="margin-left:.5rem;border-color:#22c55e;color:#22c55e">Unanimous</span>' : ''}
+        ${tied       ? '<span class="card-badge" style="margin-left:.5rem;border-color:#f59e0b;color:#f59e0b">Tie</span>'       : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap">
+        <div class="chat-sentiment label-${sentClass}" style="font-size:1.4rem;margin:0">
+          ${winner} <span class="chat-sentiment-emoji">${emojis[winner]||''}</span>
+        </div>
+        <div style="flex:1;min-width:140px">
+          ${countBars}
+        </div>
+      </div>
+      ${supporters ? `<div style="margin-top:.5rem;font-size:.72rem;color:var(--text-muted)">Voted <strong style="color:var(--text-primary)">${winner}</strong>: ${supporters}</div>` : ''}
+    </div>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

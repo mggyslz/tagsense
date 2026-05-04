@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}TaGSense{% endblock %}
+
+{% block content %}
+
+<div class="chat-output" id="chatOutput">
+
+  <div class="chat-empty" id="emptyState">
+    <div class="chat-empty-title">TaG<span class="text-accent">Sense</span></div>
+    <div class="chat-empty-sub">Paste a Taglish, Tagalog, or English post below and hit Analyze.</div>
+    <div class="chat-empty-pills">
+      <span class="empty-pill">Taglish · Tagalog · English</span>
+      <span class="empty-pill">Facebook · Reddit · YouTube</span>
+    </div>
+  </div>
+
+  <div id="resultStream"></div>
+
+</div>
+
+<div class="chat-input-bar">
+  <div class="chat-input-inner">
+
+    <div class="chat-input-wrap">
+      <textarea
+        id="inputText"
+        class="chat-textarea"
+        placeholder="I-paste mo dito ang iyong post… e.g. Hindi ko talaga gets kung bakit so hard mag-accept ng criticism 😤"
+        rows="1"
+      ></textarea>
+    </div>
+
+    <div class="chat-controls">
+      <div class="model-select-wrap">
+        <label class="select-label">Model</label>
+        <select id="modelSelect" class="model-select">
+          {% for m in models %}
+          <option value="{{ m }}">{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button id="analyzeBtn" class="btn-send" onclick="runAnalysis()">
+        <span class="btn-send-text">Analyze</span>
+        <span class="btn-send-icon">↑</span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<div id="loadingOverlay" class="loading-overlay" style="display:none">
+  <div class="loading-spinner"></div>
+  <span class="loading-text">Analyzing…</span>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let confidenceChart = null;
+let analysisCount = 0;
+
+const ta = document.getElementById('inputText');
+ta.addEventListener('input', () => {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+});
+
+ta.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') runAnalysis();
+});
+
+async function runAnalysis() {
+  const text  = ta.value.trim();
+  const model = document.getElementById('modelSelect').value;
+  if (!text) return;
+
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  document.getElementById('analyzeBtn').disabled = true;
+
+  try {
+    const res  = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    renderResult(data, text, model);
+    ta.value = '';
+    ta.style.height = 'auto';
+  } catch(e) {
+    alert('Error connecting to server. Is Flask running?');
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('analyzeBtn').disabled = false;
+  }
+}
+
+function trueTopEntry(r) {
+  const c = r.confidence || {};
+  return Object.entries(c).reduce((best, cur) => cur[1] > best[1] ? cur : best, ['neutral', 0]);
+}
+function trueLabel(r) {
+  const key = trueTopEntry(r)[0];
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+function truePct(r) { return +(trueTopEntry(r)[1] * 100).toFixed(1); }
+
+function renderResult(data, inputText, model) {
+  document.getElementById('emptyState').style.display = 'none';
+
+  analysisCount++;
+  const id = 'result-' + analysisCount;
+
+  const emojis  = { Positive: '😊', Negative: '😠', Neutral: '😐' };
+  const classes  = { Positive: 'positive', Negative: 'negative', Neutral: 'neutral' };
+  const label     = data.label;
+  const sentClass = classes[label] || 'neutral';
+
+  const posConf = (data.confidence.positive * 100).toFixed(1);
+  const neuConf = (data.confidence.neutral  * 100).toFixed(1);
+  const negConf = (data.confidence.negative * 100).toFixed(1);
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble';
+  bubble.id = id;
+  bubble.innerHTML = `
+    <!-- User message -->
+    <div class="chat-user-msg">
+      <span class="chat-user-meta">${escHtml(model)}</span>
+      <div class="chat-user-text">${escHtml(inputText)}</div>
+    </div>
+
+    <!-- Assistant response -->
+    <div class="chat-response">
+      <div class="chat-response-grid">
+
+        <!-- Sentiment result -->
+        <div class="chat-result-card">
+          <div class="chat-result-label">Sentiment</div>
+          <div class="chat-sentiment label-${sentClass}">
+            ${label} <span class="chat-sentiment-emoji">${emojis[label] || ''}</span>
+          </div>
+          <div class="enhancement-badges" style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.35rem">
+            ${data.is_placeholder ? '<span class="card-badge badge-warning">Placeholder Mode</span>' : ''}
+            ${data.low_confidence ? '<span class="card-badge" style="border-color:#f59e0b;color:#f59e0b">⚠ Low Confidence</span>' : ''}
+            ${data.override_triggered ? `<span class="card-badge" style="border-color:#ef4444;color:#ef4444">⚡ Override${data.override_keyword ? ': <em>' + escHtml(data.override_keyword) + '</em>' : ''}</span>` : ''}
+          </div>
+          <div class="chat-conf-chart-wrap">
+            <canvas id="chart-${id}" height="90"></canvas>
+          </div>
+        </div>
+
+        <!-- CSD Metrics -->
+        <div class="chat-result-card">
+          <div class="chat-result-label">Code-Switch Density</div>
+          <div class="chat-metrics-grid">
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.csd}%</div>
+              <div class="chat-metric-label">CSD Score</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.token_count}</div>
+              <div class="chat-metric-label">Tokens</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.lang_type}</div>
+              <div class="chat-metric-label">Language</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${data.emoji_count}</div>
+              <div class="chat-metric-label">Emojis</div>
+            </div>
+          </div>
+          <div class="band-display" style="margin-top:.75rem">${data.band}</div>
+        </div>
+
+      </div>
+    </div>
+  `;
+
+  document.getElementById('resultStream').appendChild(bubble);
+
+  bubble.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const ctx = document.getElementById('chart-' + id).getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Negative', 'Neutral', 'Positive'],
+      datasets: [{
+        data: [+negConf, +neuConf, +posConf],
+        backgroundColor: ['#ef4444cc', '#6b7280cc', '#22c55ecc'],
+        borderColor:     ['#ef4444',   '#6b7280',   '#22c55e'],
+        borderWidth: 1,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          max: 100, min: 0,
+          ticks: { color: '#94a3b8', callback: v => v + '%', font: { size: 10 } },
+          grid: { color: '#1e293b' }
+        },
+        y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

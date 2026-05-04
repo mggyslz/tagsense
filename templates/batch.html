@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}TaGSense{% endblock %}
+
+{% block content %}
+
+<div class="chat-output" id="chatOutput">
+
+  <div class="chat-empty" id="emptyState">
+    <div class="chat-empty-title">Batch <span class="text-accent">Analysis</span></div>
+    <div class="chat-empty-sub">Paste multiple posts below — one per line — then hit Run Batch.</div>
+    <div class="chat-empty-pills">
+      <span class="empty-pill">One post per line</span>
+      <span class="empty-pill">Up to hundreds of posts</span>
+    </div>
+  </div>
+
+  <div id="resultStream"></div>
+
+</div>
+
+<div class="chat-input-bar">
+  <div class="chat-input-inner">
+
+    <div class="chat-input-wrap">
+      <textarea
+        id="batchText"
+        class="chat-textarea"
+        placeholder="Grabe ang traffic ngayon, so stressful talaga!&#10;I'm so happy with my results today 🎉&#10;Hindi ko gets bakit ganito ang nangyayari..."
+        rows="3"
+      ></textarea>
+    </div>
+
+    <div class="chat-controls">
+      <div class="model-select-wrap">
+        <label class="select-label">Model</label>
+        <select id="modelSelect" class="model-select">
+          {% for m in models %}
+          <option value="{{ m }}">{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button id="exportCsvBtn" class="btn-secondary" onclick="exportCSV()" style="display:none">Export CSV</button>
+      <button id="batchBtn" class="btn-send" onclick="runBatch()">
+        <span class="btn-send-text">Run Batch</span>
+        <span class="btn-send-icon">↑</span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<div id="loadingOverlay" class="loading-overlay" style="display:none">
+  <div class="loading-spinner"></div>
+  <span class="loading-text">Processing batch…</span>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let distChart = null;
+let batchResults = [];
+
+async function runBatch() {
+  const text  = document.getElementById('batchText').value.trim();
+  const model = document.getElementById('modelSelect').value;
+  if (!text) return;
+
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  document.getElementById('batchBtn').disabled = true;
+
+  try {
+    const res  = await fetch('/batch/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    batchResults = data.results;
+    renderBatch(data, model);
+    document.getElementById('batchText').value = '';
+  } catch(e) {
+    alert('Error connecting to server.');
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('batchBtn').disabled = false;
+  }
+}
+
+function trueTopEntry(r) {
+  const c = r.confidence || {};
+  return Object.entries(c).reduce((best, cur) => cur[1] > best[1] ? cur : best, ['neutral', 0]);
+}
+function trueLabel(r) {
+  const key = trueTopEntry(r)[0];
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+function truePct(r) { return +(trueTopEntry(r)[1] * 100).toFixed(1); }
+
+function renderBatch(data, model) {
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('exportCsvBtn').style.display = '';
+
+  const total = data.results.length;
+  const dist  = data.distribution;
+
+  const block = document.createElement('div');
+  block.className = 'chat-bubble';
+  block.innerHTML = `
+    <!-- User echo -->
+    <div class="chat-user-msg">
+      <span class="chat-user-meta">${escHtml(model)} · ${total} posts</span>
+      <div class="chat-user-text">${total} posts submitted for batch analysis</div>
+    </div>
+
+    <!-- Response -->
+    <div class="chat-response">
+      <div class="chat-response-grid">
+
+        <!-- Distribution chart -->
+        <div class="chat-result-card">
+          <div class="chat-result-label">Sentiment Distribution</div>
+          <canvas id="distChart" height="180"></canvas>
+          <div class="dist-stats" style="margin-top:.75rem">
+            <span class="dist-positive">${dist.Positive} Positive</span>
+            <span class="dist-neutral">${dist.Neutral} Neutral</span>
+            <span class="dist-negative">${dist.Negative} Negative</span>
+          </div>
+        </div>
+
+        <!-- Summary stats -->
+        <div class="chat-result-card">
+          <div class="chat-result-label">Batch Summary</div>
+          <div class="chat-metrics-grid">
+            <div class="chat-metric">
+              <div class="chat-metric-val">${total}</div>
+              <div class="chat-metric-label">Total Posts</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${dist.Positive}</div>
+              <div class="chat-metric-label">Positive</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${dist.Neutral}</div>
+              <div class="chat-metric-label">Neutral</div>
+            </div>
+            <div class="chat-metric">
+              <div class="chat-metric-val">${dist.Negative}</div>
+              <div class="chat-metric-label">Negative</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Results table -->
+      <div class="chat-table-wrap">
+        <div class="chat-result-label" style="margin-bottom:.6rem">All Results</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Text</th><th>Sentiment</th>
+                <th>Confidence</th><th>CSD</th><th>Band</th>
+                <th>Language</th><th>Emoji</th>
+              </tr>
+            </thead>
+            <tbody id="batchTableBody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:.5rem;font-size:.72rem;color:var(--text-muted);display:flex;gap:1rem;flex-wrap:wrap">
+          <span><span style="color:#f59e0b">⚠</span> Low Confidence</span>
+          <span><span style="color:#ef4444">⚡</span> Override</span>
+          <span><span style="color:#a78bfa">〜</span> Sarcasm</span>
+          <span><span style="color:#38bdf8">⊕</span> Contradiction</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('resultStream').appendChild(block);
+  block.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const ctx = document.getElementById('distChart').getContext('2d');
+  if (distChart) distChart.destroy();
+  distChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Positive', 'Neutral', 'Negative'],
+      datasets: [{
+        data: [dist.Positive, dist.Neutral, dist.Negative],
+        backgroundColor: ['#22c55e99', '#6b728099', '#ef444499'],
+        borderColor:     ['#22c55e',   '#6b7280',   '#ef4444'],
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { family: 'DM Sans' } } }
+      }
+    }
+  });
+
+  const tbody = document.getElementById('batchTableBody');
+  data.results.forEach((r, i) => {
+    const label     = r.label;
+    const topPct    = truePct(r);
+    const sentClass = { Positive:'positive', Negative:'negative', Neutral:'neutral' }[label];
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="td-num">${i+1}</td>
+      <td class="td-text" title="${escHtml(r.full_text)}">${escHtml(r.text)}</td>
+      <td>
+        <span class="badge-sentiment ${sentClass}">${label}</span>
+        ${r.low_confidence ? '<span title="Low Confidence" style="margin-left:.3rem;font-size:.7rem;color:#f59e0b;vertical-align:middle">⚠</span>' : ''}
+        ${r.override_triggered ? '<span title="Override triggered" style="margin-left:.2rem;font-size:.7rem;color:#ef4444;vertical-align:middle">⚡</span>' : ''}
+        ${r.sarcasm_detected ? '<span title="Sarcasm detected" style="margin-left:.2rem;font-size:.7rem;color:#a78bfa;vertical-align:middle">〜</span>' : ''}
+        ${r.contradiction_detected ? '<span title="Contradiction detected" style="margin-left:.2rem;font-size:.7rem;color:#38bdf8;vertical-align:middle">⊕</span>' : ''}
+      </td>
+      <td class="td-num">${topPct}%</td>
+      <td class="td-num">${r.csd}%</td>
+      <td class="td-band">${r.band.split(':')[1] || r.band}</td>
+      <td><span class="lang-pill">${r.lang_type}</span></td>
+      <td class="td-num">${r.has_emoji ? '✓ ' + r.emoji_count : '—'}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function exportCSV() {
+  if (!batchResults.length) return;
+  const headers = ['#','Text','Sentiment','Confidence%','CSD%','Band','Language','EmojiCount'];
+  const rows = batchResults.map((r,i) => [
+    i+1, '"'+r.full_text.replace(/"/g,'""')+'"',
+    r.label, truePct(r), r.csd,
+    '"'+r.band+'"', r.lang_type, r.emoji_count
+  ]);
+  const csv  = [headers,...rows].map(r=>r.join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href=url; a.download='tagsense_batch.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}
