@@ -200,70 +200,38 @@ band3 = dataset['train'].filter(lambda x: x['density_band'] == 3)
 
 ```
 .
-│   .gitignore
+.
 │   app.py
 │   enhancer.py
-│   history.db
 │   logger.py
 │   predict.py
-│   README.md
-│   requirements.txt
 │   utils.py
+│   requirements.txt
+│   README.md
+│   .gitignore
+│   history.db
 │
-├───models
-│   ├───taglish-mbert-sentiment
-│   │       config.json
-│   │       model.safetensors
-│   │       special_tokens_map.json
-│   │       tokenizer.json
-│   │       tokenizer_config.json
-│   │       vocab.txt
-│   │
-│   ├───taglish-tlunified-sentiment
-│   │       config.json
-│   │       merges.txt
-│   │       model.safetensors
-│   │       special_tokens_map.json
-│   │       tokenizer.json
-│   │       tokenizer_config.json
-│   │       vocab.json
-│   │
-│   └───taglish-xlm-roberta-sentiment
-│           config.json
-│           model.safetensors
-│           sentencepiece.bpe.model
-│           special_tokens_map.json
-│           tokenizer.json
-│           tokenizer_config.json
+├── models/
+│   ├── taglish-mbert-sentiment/
+│   ├── taglish-tlunified-sentiment/
+│   └── taglish-xlm-roberta-sentiment/
 │
-├───static
-│   ├───css
-│   │       style.css
-│   │
-│   ├───images
-│   │       architecture.png
-│   │       shocked.png
-│   │
-│   └───js
-│           chart.umd.min.js
-│           main.js
+├── static/
+│   ├── css/style.css
+│   ├── js/main.js
+│   ├── js/chart.umd.min.js
+│   └── images/
+│       ├── architecture.png
+│       └── shocked.png
 │
-├───templates
-│       about.html
-│       base.html
-│       batch.html
-│       compare.html
-│       history.html
-│       index.html
-│       landing.html
-│
-└───__pycache__
-        enhancer.cpython-313.pyc
-        logger.cpython-313.pyc
-        predict.cpython-313.pyc
-        utils.cpython-313.pyc
-```
-
+├── templates/
+│   ├── base.html
+│   ├── landing.html
+│   ├── index.html
+│   ├── about.html
+│   ├── batch.html
+│   ├── compare.html
+│   └── history.html
 ---
 
 ## Societal Impact & Intended Use
