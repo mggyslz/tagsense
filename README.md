@@ -50,7 +50,7 @@ The corpus was constructed entirely in-house using a custom data collection pipe
 | Reddit | 4,047 | Negative | 47.9% |
 | YouTube | 2,198 | Positive | 6.6% |
 | Facebook | 977 | Negative | 48.1% |
-| AI-Augmented | 485 | Neutral (only) | — |
+| Augmented | 485 | Neutral (only) | — |
 | **Total** | **7,707** | **Near-balanced** | — |
 
 **Class balance:** Positive 33.4% · Negative 33.0% · Neutral 33.6%
